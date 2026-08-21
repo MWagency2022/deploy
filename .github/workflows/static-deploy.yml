@@ -1,0 +1,238 @@
+# ---------------------------------------------------------------
+#  MW Agency - Deploiement d'un site statique vers un hebergement
+#  mutualise (Infomaniak, OVH, Hostinger, o2switch, Ionos...)
+#
+#  Ce workflow est central : il est appele par les depots clients.
+#  Ne jamais y ecrire de valeur propre a un client.
+# ---------------------------------------------------------------
+
+name: Deploiement statique MW Agency
+
+on:
+  workflow_call:
+    inputs:
+      build_command:
+        description: "Commande de build"
+        type: string
+        default: "npm run build"
+        required: false
+      build_dir:
+        description: "Dossier contenant le site final"
+        type: string
+        default: "dist/client"
+        required: false
+      index_file:
+        description: "Fichier dont la presence prouve que le build est statique"
+        type: string
+        default: "index.html"
+        required: false
+      protocol:
+        description: "sftp | ftps | ftp"
+        type: string
+        default: "sftp"
+        required: false
+      node_version:
+        type: string
+        default: "20"
+        required: false
+      backup:
+        description: "Sauvegarder la version en ligne avant ecrasement"
+        type: boolean
+        default: true
+        required: false
+      backup_keep:
+        description: "Nombre de sauvegardes recentes conservees (la plus ancienne est gardee en plus)"
+        type: number
+        default: 10
+        required: false
+    secrets:
+      SFTP_HOST:
+        required: true
+      SFTP_USERNAME:
+        required: true
+      SFTP_PASSWORD:
+        required: true
+      SFTP_PORT:
+        required: false
+      SFTP_REMOTE_PATH:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperation du code
+        uses: actions/checkout@v4
+
+      - name: Installation de Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Installation des dependances
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build
+        run: ${{ inputs.build_command }}
+
+      - name: Verification du build
+        run: |
+          BUILD_DIR="${{ inputs.build_dir }}"
+          INDEX="$BUILD_DIR/${{ inputs.index_file }}"
+
+          echo "Dossier attendu : $BUILD_DIR"
+          ls -la "$BUILD_DIR" 2>/dev/null | head -40 || true
+
+          if [ ! -f "$INDEX" ]; then
+            echo ""
+            echo "ERREUR : $INDEX est introuvable."
+            echo "Le build ne produit pas de site statique exploitable."
+            echo "Verifier le prerendu (vite.config) ou l entree build_dir."
+            exit 1
+          fi
+          echo "OK : $INDEX present"
+
+      - name: Installation de lftp
+        run: sudo apt-get update && sudo apt-get install -y lftp
+
+      - name: Preparation de la connexion
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+        run: |
+          PROTOCOL="${{ inputs.protocol }}"
+          CONNECT_FILE="$RUNNER_TEMP/lftp-connect.txt"
+
+          case "$PROTOCOL" in
+            sftp)
+              PORT="${SFTP_PORT:-22}"
+              SCHEME="sftp"
+              SETTINGS="set sftp:auto-confirm yes"
+              ;;
+            ftps)
+              PORT="${SFTP_PORT:-21}"
+              SCHEME="ftp"
+              SETTINGS="set ftp:ssl-force true; set ftp:ssl-protect-data true; set ssl:verify-certificate no"
+              ;;
+            ftp)
+              PORT="${SFTP_PORT:-21}"
+              SCHEME="ftp"
+              SETTINGS="set ftp:ssl-allow no"
+              ;;
+            *)
+              echo "ERREUR : protocole inconnu '$PROTOCOL' (attendu : sftp, ftps ou ftp)"
+              exit 1
+              ;;
+          esac
+
+          umask 077
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set net:max-retries 3"
+            echo "set net:timeout 20"
+            echo "$SETTINGS"
+            echo "open -u \"$SFTP_USERNAME\",\"$SFTP_PASSWORD\" -p $PORT $SCHEME://$SFTP_HOST"
+          } > "$CONNECT_FILE"
+          chmod 600 "$CONNECT_FILE"
+
+          echo "CONNECT_FILE=$CONNECT_FILE" >> $GITHUB_ENV
+          echo "Protocole $PROTOCOL, port $PORT"
+
+      - name: Sauvegarde de la version en ligne
+        if: ${{ inputs.backup }}
+        continue-on-error: true
+        shell: bash {0}
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          SITE_NAME=$(basename "${SFTP_REMOTE_PATH%/}")
+          STAMP=$(date -u +'%Y-%m-%d_%H%M')
+          SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
+          BACKUP_DIR="backups/$SITE_NAME/${STAMP}_${SHORT_SHA}"
+          echo "BACKUP_DIR=$BACKUP_DIR" >> $GITHUB_ENV
+          echo "BACKUP_ROOT=backups/$SITE_NAME" >> $GITHUB_ENV
+
+          LOCAL="$RUNNER_TEMP/site-backup"
+          rm -rf "$LOCAL" && mkdir -p "$LOCAL"
+
+          { cat "$CONNECT_FILE"; echo "mirror \"$SFTP_REMOTE_PATH\" \"$LOCAL\""; echo "quit"; } > "$RUNNER_TEMP/pull.txt"
+          lftp -f "$RUNNER_TEMP/pull.txt"
+
+          if [ -z "$(ls -A "$LOCAL" 2>/dev/null)" ]; then
+            echo "Rien a sauvegarder (site vide ou premier deploiement)"
+            exit 0
+          fi
+
+          echo "Fichiers sauvegardes : $(find "$LOCAL" -type f | wc -l)"
+
+          { cat "$CONNECT_FILE"; echo "mirror -R \"$LOCAL\" \"$BACKUP_DIR\""; echo "quit"; } > "$RUNNER_TEMP/push.txt"
+          lftp -f "$RUNNER_TEMP/push.txt"
+
+          echo "Sauvegarde creee : $BACKUP_DIR"
+
+      - name: Mise en ligne
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          BUILD_DIR="${{ inputs.build_dir }}"
+          echo "Envoi de $BUILD_DIR vers $SFTP_REMOTE_PATH"
+
+          { cat "$CONNECT_FILE"; echo "mirror -R --delete \"$BUILD_DIR/\" \"$SFTP_REMOTE_PATH\""; echo "quit"; } > "$RUNNER_TEMP/deploy.txt"
+          lftp -f "$RUNNER_TEMP/deploy.txt"
+
+          echo "Mise en ligne terminee"
+
+      - name: Rotation des sauvegardes
+        if: ${{ inputs.backup }}
+        continue-on-error: true
+        shell: bash {0}
+        run: |
+          KEEP=${{ inputs.backup_keep }}
+
+          { cat "$CONNECT_FILE"; echo "cls -1 -F \"$BACKUP_ROOT/\""; echo "quit"; } > "$RUNNER_TEMP/list.txt"
+          RAW=$(lftp -f "$RUNNER_TEMP/list.txt" 2>/dev/null || true)
+
+          ALL=$(echo "$RAW" | grep '/$' | sed 's:/$::' | sed 's:.*/::' | grep -v '^[[:space:]]*$' | sort || true)
+
+          if [ -z "$ALL" ]; then
+            echo "Aucune sauvegarde listee"
+            exit 0
+          fi
+
+          TOTAL=$(echo "$ALL" | wc -l)
+          LIMIT=$((KEEP + 1))
+          echo "Sauvegardes presentes : $TOTAL (limite : 1 originale + $KEEP recentes)"
+
+          if [ "$TOTAL" -le "$LIMIT" ]; then
+            echo "Rien a supprimer"
+            exit 0
+          fi
+
+          echo "Sauvegarde d origine conservee : $(echo "$ALL" | head -n 1)"
+          TO_DELETE=$(echo "$ALL" | tail -n +2 | head -n "-$KEEP")
+
+          echo "$TO_DELETE" | while read -r DIR; do
+            [ -z "$DIR" ] && continue
+            { cat "$CONNECT_FILE"; echo "rm -r \"$BACKUP_ROOT/$DIR\""; echo "quit"; } > "$RUNNER_TEMP/rm.txt"
+            lftp -f "$RUNNER_TEMP/rm.txt" || true
+            echo "Supprime : $DIR"
+          done
+
+      - name: Nettoyage des identifiants
+        if: always()
+        run: rm -f "$RUNNER_TEMP"/lftp-connect.txt "$RUNNER_TEMP"/*.txt || true
+
+      - name: Resume
+        if: success()
+        run: |
+          echo "Deploiement reussi."
+          echo "Sauvegarde de la version precedente : ${BACKUP_DIR:-aucune}"
