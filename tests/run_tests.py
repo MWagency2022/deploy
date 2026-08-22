@@ -1436,6 +1436,71 @@ verifier(60, "Un sitemap vide est un avertissement, pas un echec de production",
 verifier('60b', "Un sitemap peuple sur un autre domaine reste un echec",
          'echecs.append("le sitemap en ligne ne contient pas le domaine final")' in _pc)
 
+# ============================================================ 61 — creation du dossier des sauvegardes
+#  Bug reel : le serveur SFTP d Infomaniak refuse de creer plusieurs niveaux
+#  d un seul coup. "backups/<site>/<horodatage>" echouait donc silencieusement
+#  a l ecriture, et un site livre ne pouvait plus etre publie.
+
+def jouer_emplacement(faux_lftp, remote='sites/testmwagency.ch', configure=''):
+    """Execute resolve_backup_path.py avec un faux serveur."""
+    d = tempfile.mkdtemp()
+    faux = os.path.join(d, 'lftp')
+    open(faux, 'w').write("#!/usr/bin/env bash\n" + faux_lftp)
+    os.chmod(faux, 0o755)
+    connect = os.path.join(d, 'connect.txt')
+    open(connect, 'w').write("set cmd:fail-exit yes\nopen serveur\n")
+    env = dict(os.environ,
+               PATH=d + os.pathsep + os.environ['PATH'],
+               PYTHONPATH=SCRIPTS, RUNNER_TEMP=d, CONNECT_FILE=connect,
+               MW_REPORT=os.path.join(d, 'mw-report.json'),
+               GITHUB_ENV=os.path.join(d, 'env.txt'),
+               GITHUB_OUTPUT=os.path.join(d, 'out.txt'),
+               MW_TRACE=os.path.join(d, 'trace.txt'))
+    r = subprocess.run([sys.executable, os.path.join(SCRIPTS, 'resolve_backup_path.py'),
+                        remote, configure], capture_output=True, text=True,
+                       env=env, timeout=DELAI_MAX)
+    trace = open(env['MW_TRACE']).read() if os.path.exists(env['MW_TRACE']) else ''
+    envtxt = open(env['GITHUB_ENV']).read() if os.path.exists(env['GITHUB_ENV']) else ''
+    rep = json.load(open(env['MW_REPORT'])) if os.path.exists(env['MW_REPORT']) else {}
+    return trace, envtxt, rep, r.stdout + r.stderr
+
+
+# Le faux serveur note ce qu on lui demande et refuse tout mkdir a plusieurs
+# niveaux, exactement comme le serveur reel.
+SERVEUR_MKDIR_UN_NIVEAU = """
+CMD=$(cat "$2" 2>/dev/null)
+echo "$CMD" >> "$MW_TRACE"
+if echo "$CMD" | grep -q 'mkdir "[^"]*/[^"]*/'; then exit 1; fi
+exit 0
+"""
+
+trace, envtxt, rep, out = jouer_emplacement(SERVEUR_MKDIR_UN_NIVEAU)
+verifier(61, "Le dossier des sauvegardes est cree niveau par niveau",
+         'mkdir "backups"' in trace and 'mkdir "backups/testmwagency.ch"' in trace
+         and 'mkdir -p' not in trace,
+         "les niveaux ne sont pas crees un par un : " + trace)
+
+verifier('61b', "L existence du dossier des sauvegardes est verifiee apres creation",
+         'cd "backups/testmwagency.ch"' in trace,
+         "aucune verification apres creation")
+
+verifier('61c', "La preparation reussie n empeche pas la sauvegarde",
+         'BACKUP_SAFE=1' in envtxt and rep.get('status_global') != 'blocked')
+
+# Un serveur qui refuse tout : la preparation echoue mais ne rend pas de
+# verdict elle-meme, c est l etape de sauvegarde qui tranche selon le statut.
+SERVEUR_REFUSE_TOUT = """
+CMD=$(cat "$2" 2>/dev/null)
+echo "$CMD" >> "$MW_TRACE"
+exit 1
+"""
+
+trace, envtxt, rep, out = jouer_emplacement(SERVEUR_REFUSE_TOUT)
+verifier('61d', "Un dossier de sauvegarde impossible a creer ne bloque pas ici",
+         rep.get('status_global') != 'blocked' and 'BACKUP_SAFE=1' in envtxt
+         and "n'a pas pu etre cree" in " ".join(rep.get('infos', [])),
+         "la preparation rend un verdict alors que ce n est pas son role")
+
 # ============================================================ bilan
 print("\n" + "=" * 68)
 ok = sum(1 for *_, c, _ in resultats if c)

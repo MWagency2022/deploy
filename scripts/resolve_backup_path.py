@@ -7,7 +7,7 @@ effacees par le miroir avec suppression du deploiement suivant.
 
   resolve_backup_path.py <chemin_distant> [<backup_path_configure>]
 """
-import os, posixpath, sys
+import os, posixpath, subprocess, sys
 import mw_common as mw
 
 distant   = (sys.argv[1] if len(sys.argv) > 1 else '').strip()
@@ -103,50 +103,55 @@ if est_dans(candidat, remote):
             "situe hors du site publie.",
             trouve=candidat, attendu=f"un dossier hors de {remote or 'la racine'}")
 
-# ---------------------------------------------------------------------
-# SONDE TEMPORAIRE : ou le compte FTP autorise-t-il l ecriture ?
-# (retiree des que le bon emplacement par defaut est etabli)
-# ---------------------------------------------------------------------
-def _sonde():
-    import subprocess, tempfile
+# --- creation du dossier des sauvegardes -------------------------------
+# Certains serveurs SFTP refusent de creer plusieurs niveaux d'un seul coup.
+# Le dossier est donc construit segment par segment, avant tout envoi.
+
+def _lftp(lignes, tolerant):
     connect = os.environ.get('CONNECT_FILE', '')
     if not connect or not os.path.isfile(connect):
-        print("::warning title=MW sonde::CONNECT_FILE absent")
-        return
-    base = os.environ.get('RUNNER_TEMP', tempfile.gettempdir())
-    parent = posixpath.dirname(remote)
-    essais = [
-        ('A_frere_du_site', posixpath.join(parent, '.mw-probe') if parent else '.mw-probe'),
-        ('B_racine_compte', '.mw-probe'),
-        ('C_backups_racine', 'backups/.mw-probe'),
-        ('D_dans_le_site', posixpath.join(remote, '.mw-probe') if remote else '.mw-probe'),
-    ]
-    resultats = []
-    for nom, chemin in essais:
-        f = os.path.join(base, 'probe-%s.txt' % nom)
-        with open(f, 'w', encoding='utf-8') as g:
-            g.write(open(connect, encoding='utf-8').read())
-            g.write('mkdir -p "%s"\n' % chemin)
-            g.write('quit\n')
-        c = subprocess.run(['lftp', '-f', f], capture_output=True, text=True)
-        ok = (c.returncode == 0)
-        resultats.append('%s=%s' % (nom, 'ok' if ok else 'echec'))
-        if ok:
-            f2 = os.path.join(base, 'probe-rm-%s.txt' % nom)
-            with open(f2, 'w', encoding='utf-8') as g:
-                g.write(open(connect, encoding='utf-8').read())
-                g.write('rmdir "%s"\n' % chemin)
-                g.write('quit\n')
-            subprocess.run(['lftp', '-f', f2], capture_output=True, text=True)
-    print("::warning title=MW sonde::" + " | ".join(resultats))
+        return None                      # hors deploiement : rien a preparer
+    base = os.environ.get('RUNNER_TEMP') or '.'
+    _lftp.n += 1
+    f = os.path.join(base, f'mw-prep-{_lftp.n}.txt')
+    with open(f, 'w', encoding='utf-8') as g:
+        g.write(open(connect, encoding='utf-8').read())
+        if tolerant:
+            g.write('set cmd:fail-exit no\n')   # un dossier deja present n'est pas une erreur
+        for l in lignes:
+            g.write(l + '\n')
+        g.write('quit\n')
+    return subprocess.run(['lftp', '-f', f], capture_output=True, text=True).returncode
 
 
-try:
-    _sonde()
-except Exception as exc:
-    print("::warning title=MW sonde::erreur de sonde: %s" % exc)
+_lftp.n = 0
+
+
+def preparer(chemin):
+    """Cree le dossier des sauvegardes niveau par niveau. Best effort :
+    un echec ici n'est pas un verdict, c'est l'etape de sauvegarde qui
+    tranche selon le statut du site."""
+    p = normaliser(chemin)
+    absolu = p.startswith('/')
+    lignes, courant = [], ''
+    for seg in [x for x in p.split('/') if x not in ('', '.')]:
+        courant = f'{courant}/{seg}' if courant else (f'/{seg}' if absolu else seg)
+        lignes.append(f'mkdir "{courant}"')
+    if not lignes:
+        return None
+    if _lftp(lignes, True) is None:
+        return None
+    return _lftp([f'cd "{p}"'], False) == 0
 
 print(f"\nSauvegardes ({origine}) : {candidat}")
 r['backupPath'] = candidat
+
+etat = preparer(candidat)
+if etat is True:
+    print("Dossier des sauvegardes pret.")
+elif etat is False:
+    print("Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
+    mw.info(r, "Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
+
 mw.sauver(r)
 publier(candidat, True, suppression)
