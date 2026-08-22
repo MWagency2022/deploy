@@ -1336,6 +1336,106 @@ with tempfile.TemporaryDirectory() as d:
              and chemins_obtenus['restauration'] == 'sauvegardes-mw',
              f"config={sorties.get('backup_path')} obtenus={chemins_obtenus}")
 
+
+# ============================================================ 58 — identite du moteur
+#  Bug reel trouve au premier run : github.workflow_ref designe le workflow
+#  APPELANT, pas le workflow appele. Le moteur clonait donc le site du client
+#  a la place de lui-meme, et aucun script n etait trouve.
+with tempfile.TemporaryDirectory() as d:
+    import yaml as _y
+    soucis = []
+    for nom, job in (('static-deploy.yml', 'publication'),
+                     ('static-restore.yml', 'restauration')):
+        chemin = os.path.join(RACINE, '.github', 'workflows', nom)
+        texte = open(chemin, encoding='utf-8').read()
+        wf = _y.safe_load(texte)
+
+        if 'workflow_ref' in texte:
+            soucis.append(f"{nom} utilise encore github.workflow_ref")
+
+        env = wf.get('env') or {}
+        if env.get('MOTEUR_REPO') != 'MWagency2022/deploy':
+            soucis.append(f"{nom} : MOTEUR_REPO absent ou incorrect")
+        if not env.get('MOTEUR_REF'):
+            soucis.append(f"{nom} : MOTEUR_REF absent")
+
+        # chaque recuperation du moteur doit pointer sur ces valeurs
+        for nom_job, jd in wf['jobs'].items():
+            for st in jd.get('steps') or []:
+                if st.get('name') == 'Recuperation du moteur':
+                    avec = st.get('with') or {}
+                    if avec.get('repository') != '${{ env.MOTEUR_REPO }}':
+                        soucis.append(f"{nom}/{nom_job} : repository non fige")
+                    if avec.get('ref') != '${{ env.MOTEUR_REF }}':
+                        soucis.append(f"{nom}/{nom_job} : ref non figee")
+
+    verifier(58, "Le moteur se recupere lui-meme par une identite figee",
+             not soucis, "; ".join(soucis))
+
+    # les deux workflows doivent viser la meme version
+    refs = set()
+    for nom in ('static-deploy.yml', 'static-restore.yml'):
+        wf = _y.safe_load(open(os.path.join(RACINE, '.github', 'workflows', nom),
+                               encoding='utf-8'))
+        refs.add((wf.get('env') or {}).get('MOTEUR_REF'))
+    verifier('58b', "Deploiement et restauration visent la meme version du moteur",
+             len(refs) == 1, f"versions trouvees : {refs}")
+
+
+# ============================================================ 59 — listings lftp prefixes
+#  Bug reel du premier run : lftp renvoie "sites/domaine.ch/" et non
+#  "domaine.ch/". La comparaison brute ne trouvait jamais le dossier, qui
+#  etait donc declare absent -> "nouveau site", sans sauvegarde ni protection.
+def noms_de_base(lignes):
+    """Reproduit exactement le traitement applique dans les workflows."""
+    r = subprocess.run(
+        ["sed", "-e", "s:/*$::", "-e", "s:.*/::"],
+        input="\n".join(lignes) + "\n", capture_output=True, text=True, timeout=DELAI_MAX)
+    return [l for l in r.stdout.splitlines() if l.strip()]
+
+
+formes = {
+    "noms simples":        ["testmwagency.ch/", "autre.ch/"],
+    "prefixes du chemin":  ["sites/testmwagency.ch/", "sites/autre.ch/"],
+    "sans barre finale":   ["sites/testmwagency.ch", "sites/autre.ch"],
+    "chemin absolu":       ["/home/clients/x/sites/testmwagency.ch/"],
+}
+soucis = []
+for libelle, lignes in formes.items():
+    if "testmwagency.ch" not in noms_de_base(lignes):
+        soucis.append(libelle)
+verifier(59, "Le dossier cible est reconnu quelle que soit la forme du listing lftp",
+         not soucis, f"formes non reconnues : {soucis}")
+
+verifier('59b', "Un dossier reellement absent reste absent",
+         "testmwagency.ch" not in noms_de_base(["sites/autre.ch/", "sites/vieux.ch/"]))
+
+verifier('59c', "Le marqueur est reconnu dans un listing prefixe",
+         ".mw-site.json" in noms_de_base(
+             ["sites/testmwagency.ch/index.html", "sites/testmwagency.ch/.mw-site.json"]))
+
+# la correction doit etre presente dans les deux workflows
+for nom in ('static-deploy.yml', 'static-restore.yml'):
+    texte = open(os.path.join(RACINE, '.github', 'workflows', nom), encoding='utf-8').read()
+    verifier(f'59d-{nom.split("-")[1][:7]}',
+             f"{nom} compare des noms de base, jamais des lignes brutes",
+             'parent-noms.txt' in texte
+             and 'grep -Fxq -e "$NOM" -e "$NOM/"' not in texte,
+             "comparaison brute encore presente")
+
+# ============================================================ 60 — sitemap vide
+#  Un sitemap legitimement vide ne doit pas faire echouer le controle de
+#  production ni declencher un rollback : c est un probleme de contenu.
+_pc = open(os.path.join(SCRIPTS, 'production_check.py'), encoding='utf-8').read()
+verifier(60, "Un sitemap vide est un avertissement, pas un echec de production",
+         "nb_urls = corps_s.count('<loc>')" in _pc
+         and "if nb_urls == 0:" in _pc
+         and "mw.avertir(r, 'PRODUCTION', 'sitemap'" in _pc,
+         "le controle exige encore le domaine dans un sitemap vide")
+
+verifier('60b', "Un sitemap peuple sur un autre domaine reste un echec",
+         'echecs.append("le sitemap en ligne ne contient pas le domaine final")' in _pc)
+
 # ============================================================ bilan
 print("\n" + "=" * 68)
 ok = sum(1 for *_, c, _ in resultats if c)

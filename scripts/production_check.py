@@ -65,10 +65,19 @@ if attend_sitemap:
         echecs.append("sitemap.xml servi mais ce n'est pas un sitemap valide")
     else:
         hote = re.match(r'(?i)^https?://([^/]+)', domaine).group(1)
-        if hote not in corps_s:
+        nb_urls = corps_s.count('<loc>')
+        if nb_urls == 0:
+            # Un sitemap vide est un probleme de contenu, pas de service :
+            # l audit SEO le signale deja. Le controle de production ne juge
+            # que le bon fonctionnement du site.
+            print("  sitemap servi mais vide (aucune page indexable)")
+            mw.avertir(r, 'PRODUCTION', 'sitemap',
+                       "Le sitemap en ligne est vide : aucune page indexable.",
+                       "Corriger les canonical des pages publiques.")
+        elif hote not in corps_s:
             echecs.append("le sitemap en ligne ne contient pas le domaine final")
         else:
-            print(f"  sitemap conforme au domaine {hote}")
+            print(f"  sitemap conforme au domaine {hote} ({nb_urls} page(s))")
 
 if echecs:
     print("\nCONTROLE DE PRODUCTION EN ECHEC")
