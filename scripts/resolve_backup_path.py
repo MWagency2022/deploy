@@ -85,7 +85,17 @@ else:
                 "situe hors du site (par exemple \"../sauvegardes\"), ou faire "
                 "pointer SFTP_REMOTE_PATH sur un sous-dossier dedie.",
                 trouve=remote or "(racine)", attendu="un dossier dedie")
-    candidat = f"backups/{posixpath.basename(normaliser(remote))}"
+    # Les sauvegardes sont posees a cote du dossier publie, jamais dedans.
+    # On evite volontairement un dossier "backups" a la racine du compte :
+    # chez certains hebergeurs il existe deja et n'est pas accessible en
+    # ecriture.
+    base = normaliser(remote)
+    parent_distant = posixpath.dirname(base)
+    nom_site = posixpath.basename(base)
+    if parent_distant in ('', '.'):
+        candidat = f".mw-backups/{nom_site}"
+    else:
+        candidat = posixpath.join(parent_distant, '.mw-backups', nom_site)
     origine = 'automatique'
 
 # --- verification de securite ------------------------------------------
@@ -152,46 +162,6 @@ if etat is True:
 elif etat is False:
     print("Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
     mw.info(r, "Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
-
-# --- DIAGNOSTIC TEMPORAIRE --------------------------------------------
-def _essai(cmds):
-    import tempfile
-    connect = os.environ.get('CONNECT_FILE', '')
-    base = os.environ.get('RUNNER_TEMP') or tempfile.gettempdir()
-    _essai.n = getattr(_essai, 'n', 0) + 1
-    f = os.path.join(base, 'e%d.txt' % _essai.n)
-    with open(f, 'w', encoding='utf-8') as g:
-        g.write(open(connect, encoding='utf-8').read())
-        for c in cmds:
-            g.write(c + '\n')
-        g.write('quit\n')
-    c = subprocess.run(['lftp', '-f', f], capture_output=True, text=True)
-    return c.returncode, (c.stdout + ' ' + c.stderr).strip().replace('\n', ' ')
-
-
-def _diag():
-    connect = os.environ.get('CONNECT_FILE', '')
-    if not connect or not os.path.isfile(connect):
-        return
-    lignes = []
-    for etiquette, cmds in [
-        ('pwd', ['pwd']),
-        ('mkdir_backups', ['mkdir "backups"']),
-        ('cd_backups', ['cd "backups"']),
-        ('mkdir_niveau2', ['mkdir "backups/testmwagency.ch"']),
-        ('cd_niveau2', ['cd "backups/testmwagency.ch"']),
-        ('mkdir_frere', ['mkdir "sites/.mw-backups"']),
-        ('cd_frere', ['cd "sites/.mw-backups"']),
-    ]:
-        code, txt = _essai(cmds)
-        lignes.append('%s=%s(%s)' % (etiquette, code, txt[:90]))
-    print('::warning title=MW diag::' + ' || '.join(lignes)[:900])
-
-
-try:
-    _diag()
-except Exception as exc:
-    print('::warning title=MW diag::erreur %s' % exc)
 
 mw.sauver(r)
 publier(candidat, True, suppression)

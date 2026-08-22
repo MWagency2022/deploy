@@ -898,8 +898,10 @@ def chemin_sauvegarde(numero, nom_test, remote, bp, attendu, delete=None):
 
 chemin_sauvegarde(36, "backup_path personnalise accepte",
                   "public_html/", "sauvegardes-mw", "sauvegardes-mw", delete="--delete")
-chemin_sauvegarde('36b', "Sans backup_path : chemin automatique conserve",
-                  "sites/testmwagency.ch/", "", "backups/testmwagency.ch")
+chemin_sauvegarde('36b', "Sans backup_path : sauvegardes a cote du dossier publie",
+                  "sites/testmwagency.ch/", "", "sites/.mw-backups/testmwagency.ch")
+chemin_sauvegarde('36c', "Chemin automatique : jamais un dossier backups a la racine",
+                  "web/", "", ".mw-backups/web")
 chemin_sauvegarde(37, "backup_path a l interieur du site : refuse",
                   "sites/x.ch", "sites/x.ch/backups", None)
 chemin_sauvegarde('37b', "backup_path egal au dossier du site : refuse",
@@ -948,7 +950,8 @@ with tempfile.TemporaryDirectory() as d:
         lignes = dict(l.split('=', 1) for l in open(env_github).read().splitlines() if '=' in l)
         resultats_obtenus.append(lignes.get('BACKUP_ROOT'))
     verifier('39b', "Resolution deterministe entre deux appels",
-             len(set(resultats_obtenus)) == 1 and resultats_obtenus[0] == 'backups/testmwagency.ch',
+             len(set(resultats_obtenus)) == 1
+             and resultats_obtenus[0] == 'sites/.mw-backups/testmwagency.ch',
              str(resultats_obtenus))
 
 
@@ -1438,8 +1441,8 @@ verifier('60b', "Un sitemap peuple sur un autre domaine reste un echec",
 
 # ============================================================ 61 — creation du dossier des sauvegardes
 #  Bug reel : le serveur SFTP d Infomaniak refuse de creer plusieurs niveaux
-#  d un seul coup. "backups/<site>/<horodatage>" echouait donc silencieusement
-#  a l ecriture, et un site livre ne pouvait plus etre publie.
+#  d un seul coup, et le dossier "backups" de la racine du compte existe deja
+#  sans etre accessible en ecriture. Un site livre ne pouvait plus etre publie.
 
 def jouer_emplacement(faux_lftp, remote='sites/testmwagency.ch', configure=''):
     """Execute resolve_backup_path.py avec un faux serveur."""
@@ -1476,12 +1479,13 @@ exit 0
 
 trace, envtxt, rep, out = jouer_emplacement(SERVEUR_MKDIR_UN_NIVEAU)
 verifier(61, "Le dossier des sauvegardes est cree niveau par niveau",
-         'mkdir "backups"' in trace and 'mkdir "backups/testmwagency.ch"' in trace
+         'mkdir "sites"' in trace and 'mkdir "sites/.mw-backups"' in trace
+         and 'mkdir "sites/.mw-backups/testmwagency.ch"' in trace
          and 'mkdir -p' not in trace,
          "les niveaux ne sont pas crees un par un : " + trace)
 
 verifier('61b', "L existence du dossier des sauvegardes est verifiee apres creation",
-         'cd "backups/testmwagency.ch"' in trace,
+         'cd "sites/.mw-backups/testmwagency.ch"' in trace,
          "aucune verification apres creation")
 
 verifier('61c', "La preparation reussie n empeche pas la sauvegarde",
