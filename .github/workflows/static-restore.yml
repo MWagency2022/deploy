@@ -1,0 +1,469 @@
+# ---------------------------------------------------------------
+#  MW Agency - Restauration d'une sauvegarde
+#
+#  Une restauration ecrase le site en ligne : elle est protegee au
+#  moins autant qu'un deploiement.
+#
+#  Deux temps :
+#    1. Run workflow sans nom -> la liste s'affiche, rien n'est touche
+#    2. Relance avec le nom et la confirmation -> restauration
+#
+#  L'adoption d'un dossier distant n'est PAS possible ici.
+# ---------------------------------------------------------------
+
+name: Restauration MW Agency
+
+on:
+  workflow_call:
+    inputs:
+      backup:
+        description: "Nom du dossier de sauvegarde. Vide = afficher la liste."
+        type: string
+        default: ""
+        required: false
+      confirm:
+        description: "Confirmation explicite de l ecrasement du site en ligne"
+        type: boolean
+        default: false
+        required: false
+      protocol:
+        type: string
+        default: "sftp"
+        required: false
+      index_file:
+        type: string
+        default: "index.html"
+        required: false
+    secrets:
+      SFTP_HOST:
+        required: true
+      SFTP_USERNAME:
+        required: true
+      SFTP_PASSWORD:
+        required: true
+      SFTP_PORT:
+        required: false
+      SFTP_REMOTE_PATH:
+        required: true
+      SITE_URL:
+        required: false
+      MW_NOTIFY_HOST:
+        required: false
+      MW_NOTIFY_PORT:
+        required: false
+      MW_NOTIFY_USER:
+        required: false
+      MW_NOTIFY_PASSWORD:
+        required: false
+      MW_NOTIFY_FROM:
+        required: false
+      MW_NOTIFY_TO:
+        required: false
+
+jobs:
+  restauration:
+    runs-on: ubuntu-latest
+
+    # Meme verrou que le deploiement : jamais deux ecritures simultanees.
+    concurrency:
+      group: mw-deploiement-${{ github.repository }}
+      cancel-in-progress: false
+
+    env:
+      MW_REPORT: ${{ github.workspace }}/mw-report.json
+      SCRIPTS: ${{ github.workspace }}/.mw-engine/scripts
+      PYTHONPATH: ${{ github.workspace }}/.mw-engine/scripts
+
+    steps:
+      - name: Identification du moteur
+        id: moteur
+        run: |
+          REF="${{ github.workflow_ref }}"
+          echo "repo=$(echo "$REF" | cut -d/ -f1,2)" >> $GITHUB_OUTPUT
+          echo "ref=${REF##*@}" >> $GITHUB_OUTPUT
+
+      - name: Recuperation du site
+        uses: actions/checkout@v4
+
+      - name: Recuperation du moteur
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.moteur.outputs.repo }}
+          ref: ${{ steps.moteur.outputs.ref }}
+          path: .mw-engine
+
+      - name: Configuration effective
+        id: config
+        continue-on-error: true
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+        run: python3 "$SCRIPTS/resolve_config.py" .
+
+      - name: Contexte de restauration
+        run: |
+          python3 -c "import mw_common as mw, sys; r=mw.charger(); r['operation']='restauration'; r['restoreBackup']=sys.argv[1]; r['revert']='none'; r['restore']='not_started'; r['safetyNet']='not_started'; r['backupIdentity']='not_started'; mw.sauver(r)" "${{ inputs.backup }}"
+          python3 "$SCRIPTS/gate.py"
+
+      - name: Installation de lftp
+        if: ${{ env.MW_BLOCKED != 'true' }}
+        run: sudo apt-get update && sudo apt-get install -y lftp
+
+      - name: Preparation de la connexion
+        if: ${{ env.MW_BLOCKED != 'true' }}
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          case "${{ inputs.protocol }}" in
+            sftp) PORT="${SFTP_PORT:-22}"; SCHEME="sftp"; SET="set sftp:auto-confirm yes" ;;
+            ftps) PORT="${SFTP_PORT:-21}"; SCHEME="ftp";  SET="set ftp:ssl-force true; set ftp:ssl-protect-data true; set ssl:verify-certificate no" ;;
+            ftp)  PORT="${SFTP_PORT:-21}"; SCHEME="ftp";  SET="set ftp:ssl-allow no" ;;
+            *) echo "Protocole inconnu"; exit 1 ;;
+          esac
+          umask 077
+          C="$RUNNER_TEMP/lftp-connect.txt"
+          {
+            echo "set cmd:fail-exit yes"
+            echo "set net:max-retries 3"
+            echo "set net:timeout 20"
+            echo "$SET"
+            echo "open -u \"$SFTP_USERNAME\",\"$SFTP_PASSWORD\" -p $PORT $SCHEME://$SFTP_HOST"
+          } > "$C"
+          chmod 600 "$C"
+          echo "CONNECT_FILE=$C" >> $GITHUB_ENV
+
+      - name: Emplacement des sauvegardes
+        if: ${{ env.MW_BLOCKED != 'true' }}
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          # Exactement le meme script que le deploiement : les deux workflows
+          # ne peuvent pas diverger sur l emplacement des sauvegardes.
+          python3 "$SCRIPTS/resolve_backup_path.py" \
+            "$SFTP_REMOTE_PATH" "${{ steps.config.outputs.backup_path }}"
+          python3 "$SCRIPTS/gate.py"
+
+      - name: Sauvegardes disponibles
+        if: ${{ env.MW_BLOCKED != 'true' }}
+        shell: bash {0}
+        run: |
+          { cat "$CONNECT_FILE"; echo "cls -1 -F \"$BACKUP_ROOT/\""; echo "quit"; } > "$RUNNER_TEMP/list.txt"
+          RAW=$(lftp -f "$RUNNER_TEMP/list.txt" 2>/dev/null || true)
+          ALL=$(echo "$RAW" | grep '/$' | sed 's:/$::' | sed 's:.*/::' | grep -v '^[[:space:]]*$' | sort -r || true)
+          printf '%s\n' "$ALL" > "$RUNNER_TEMP/backups.txt"
+          {
+            echo "# Sauvegardes disponibles"
+            echo ""
+            if [ -z "$ALL" ]; then echo "Aucune sauvegarde trouvée."
+            else echo '```text'; echo "$ALL"; echo '```'; fi
+          } >> $GITHUB_STEP_SUMMARY
+          echo "$ALL"
+
+      - name: Mode consultation
+        if: ${{ inputs.backup == '' }}
+        run: |
+          echo "Aucun nom fourni : rien n a ete modifie."
+          {
+            echo ""
+            echo "Relancer avec l'un des noms ci-dessus **et** la case de"
+            echo "confirmation cochée pour restaurer."
+          } >> $GITHUB_STEP_SUMMARY
+
+      # ============================================================
+      #  A partir d ici : une vraie restauration est demandee
+      # ============================================================
+
+      - name: Verification de la demande
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' }}
+        shell: bash {0}
+        run: |
+          CHOIX="${{ inputs.backup }}"
+          if ! grep -qxF "$CHOIX" "$RUNNER_TEMP/backups.txt"; then
+            python3 "$SCRIPTS/record.py" restore failed --bloquant \
+              --page RESTAURATION --type identite --categorie technique \
+              --message "La sauvegarde \"$CHOIX\" n existe pas sur le serveur." \
+              --action "Relancer le workflow sans nom pour afficher la liste reelle des sauvegardes."
+          elif [ "${{ inputs.confirm }}" != "true" ]; then
+            python3 "$SCRIPTS/record.py" restore failed --bloquant \
+              --page RESTAURATION --type identite --categorie technique \
+              --message "Confirmation manquante : la restauration ecrase le site en ligne." \
+              --action "Relancer en cochant la case de confirmation."
+          else
+            echo "Sauvegarde demandee : $CHOIX"
+          fi
+          python3 "$SCRIPTS/gate.py"
+
+      - name: Verification du dossier distant
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' }}
+        shell: bash {0}
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          # Meme sonde que le deploiement. L adoption n est jamais permise ici.
+          REMOTE="${SFTP_REMOTE_PATH%/}"
+          NOM=$(basename "$REMOTE")
+          PARENT=$(dirname "$REMOTE")
+          [ "$PARENT" = "." ] && PARENT=""
+
+          CONNEXION=erreur; PARENT_ETAT=erreur
+          DOSSIER=absent; VIDE=oui; MARQUEUR=aucun
+          M="$RUNNER_TEMP/distant.mw-site.json"
+          rm -f "$M"
+
+          { cat "$CONNECT_FILE"; echo "cls -1 ."; echo "quit"; } > "$RUNNER_TEMP/s1.txt"
+          if lftp -f "$RUNNER_TEMP/s1.txt" > "$RUNNER_TEMP/racine.txt" 2>&1; then
+            CONNEXION=ok
+          else
+            echo "Connexion impossible :"; sed 's/^/    /' "$RUNNER_TEMP/racine.txt" | head -5
+          fi
+
+          if [ "$CONNEXION" = "ok" ]; then
+            { cat "$CONNECT_FILE"; echo "cls -1 -a \"${PARENT:-.}/\""; echo "quit"; } > "$RUNNER_TEMP/s2.txt"
+            if lftp -f "$RUNNER_TEMP/s2.txt" > "$RUNNER_TEMP/parent.txt" 2>&1; then
+              PARENT_ETAT=ok
+              if grep -Fxq -e "$NOM" -e "$NOM/" "$RUNNER_TEMP/parent.txt"; then DOSSIER=existe; else DOSSIER=absent; fi
+            else
+              echo "Parent illisible :"; sed 's/^/    /' "$RUNNER_TEMP/parent.txt" | head -5
+            fi
+          fi
+
+          if [ "$PARENT_ETAT" = "ok" ] && [ "$DOSSIER" = "existe" ]; then
+            { cat "$CONNECT_FILE"; echo "cls -1 -a \"$SFTP_REMOTE_PATH/\""; echo "quit"; } > "$RUNNER_TEMP/s3.txt"
+            if lftp -f "$RUNNER_TEMP/s3.txt" > "$RUNNER_TEMP/contenu.txt" 2>&1; then
+              ENTREES=$(grep -v -E '^\.\.?/?$' "$RUNNER_TEMP/contenu.txt" | grep -v '^[[:space:]]*$' || true)
+              NB=$(echo "$ENTREES" | grep -c . || true)
+              [ "$NB" -gt 0 ] && VIDE=non
+              echo "Contenu du dossier : $NB entree(s)"
+              if echo "$ENTREES" | grep -qE '(^|/)\.mw-site\.json/?$'; then
+                { cat "$CONNECT_FILE"
+                  echo "get \"$SFTP_REMOTE_PATH/.mw-site.json\" -o \"$M\""
+                  echo "quit"; } > "$RUNNER_TEMP/s4.txt"
+                if lftp -f "$RUNNER_TEMP/s4.txt" >/dev/null 2>&1 && [ -s "$M" ]; then
+                  MARQUEUR="$M"
+                else
+                  MARQUEUR=erreur
+                fi
+              fi
+            else
+              DOSSIER=illisible
+            fi
+          fi
+
+          python3 "$SCRIPTS/site_identity.py" verifier \
+            --connexion "$CONNEXION" --parent "$PARENT_ETAT" \
+            --dossier "$DOSSIER" --vide "$VIDE" --marqueur "$MARQUEUR" \
+            --domaine "${{ steps.config.outputs.domain }}" \
+            --depot "${{ github.repository }}"
+          python3 "$SCRIPTS/gate.py"
+
+      - name: Filet de securite obligatoire
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' }}
+        shell: bash {0}
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          # Une restauration est destructive : sans filet, elle ne commence pas.
+          echouer() {
+            python3 "$SCRIPTS/record.py" safetyNet failed --bloquant \
+              --page FILET --type backup --categorie technique \
+              --message "La version actuellement en ligne n a pas pu etre sauvegardee : $1" \
+              --action "Aucun fichier n a ete ecrase. Verifier les droits et l espace disque du compte FTP."
+            python3 "$SCRIPTS/gate.py"
+            exit 0
+          }
+
+          STAMP=$(date -u +'%Y-%m-%d_%H%M')
+          FILET="$BACKUP_ROOT/${STAMP}_avant-restauration"
+          L="$RUNNER_TEMP/etat-actuel"
+          rm -rf "$L" && mkdir -p "$L"
+
+          { cat "$CONNECT_FILE"; echo "mirror \"$SFTP_REMOTE_PATH\" \"$L\""; echo "quit"; } > "$RUNNER_TEMP/f1.txt"
+          lftp -f "$RUNNER_TEMP/f1.txt"
+          CODE_LECTURE=$?
+
+          NB=$(find "$L" -type f 2>/dev/null | wc -l)
+          echo "Etat actuel : $NB fichier(s), code de lecture $CODE_LECTURE"
+
+          if [ "$NB" -eq 0 ]; then
+            if [ "$CODE_LECTURE" -ne 0 ]; then
+              echouer "la lecture du site en ligne a echoue"
+            fi
+            # Etat precedent vide : il n y a rien a sauvegarder, mais il faut
+            # s en souvenir. Le retour arriere consistera a revider le dossier.
+            echo "Site en ligne vide : aucun filet necessaire."
+            echo "ETAT_PRECEDENT=vide" >> $GITHUB_ENV
+            python3 "$SCRIPTS/record.py" safetyNet skipped
+            python3 -c "import mw_common as mw; r=mw.charger(); r['previousState']='vide'; mw.sauver(r)"
+            python3 "$SCRIPTS/gate.py"
+            exit 0
+          fi
+
+          [ "$CODE_LECTURE" -ne 0 ] && echouer "la lecture du site en ligne a echoue"
+
+          { cat "$CONNECT_FILE"; echo "mirror -R \"$L\" \"$FILET\""; echo "quit"; } > "$RUNNER_TEMP/f2.txt"
+          lftp -f "$RUNNER_TEMP/f2.txt"
+          [ $? -ne 0 ] && echouer "l ecriture du filet de securite a echoue"
+
+          echo "FILET=$FILET" >> $GITHUB_ENV
+          echo "ETAT_PRECEDENT=fichiers" >> $GITHUB_ENV
+          python3 -c "import mw_common as mw; r=mw.charger(); r['previousState']='fichiers'; mw.sauver(r)"
+          echo "Filet de securite cree : $FILET"
+          python3 "$SCRIPTS/record.py" safetyNet ok
+          python3 "$SCRIPTS/gate.py"
+
+      - name: Telechargement et identite de la sauvegarde
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' }}
+        shell: bash {0}
+        run: |
+          CHOIX="${{ inputs.backup }}"
+          L="$RUNNER_TEMP/restauration"
+          rm -rf "$L" && mkdir -p "$L"
+
+          { cat "$CONNECT_FILE"; echo "mirror \"$BACKUP_ROOT/$CHOIX\" \"$L\""; echo "quit"; } > "$RUNNER_TEMP/dl.txt"
+          lftp -f "$RUNNER_TEMP/dl.txt"
+          if [ $? -ne 0 ]; then
+            python3 "$SCRIPTS/record.py" backupIdentity failed --bloquant \
+              --page SAUVEGARDE --type backup --categorie technique \
+              --message "Le telechargement de la sauvegarde $CHOIX a echoue." \
+              --action "Aucun fichier n a ete ecrase. Verifier le contenu du dossier de sauvegardes."
+            python3 "$SCRIPTS/gate.py"
+            exit 0
+          fi
+
+          # Une sauvegarde d un autre client ne doit jamais pouvoir etre remise ici.
+          python3 "$SCRIPTS/site_identity.py" verifier-sauvegarde "$L" \
+            "${{ steps.config.outputs.domain }}" "${{ github.repository }}" "$CHOIX"
+          python3 "$SCRIPTS/gate.py"
+
+      - name: Restauration
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' }}
+        shell: bash {0}
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          L="$RUNNER_TEMP/restauration"
+          { cat "$CONNECT_FILE"
+            echo "mirror -R $MIRROR_DELETE \"$L/\" \"$SFTP_REMOTE_PATH\""
+            echo "quit"; } > "$RUNNER_TEMP/rs.txt"
+          lftp -f "$RUNNER_TEMP/rs.txt"
+          CODE=$?
+
+          if [ "$CODE" -ne 0 ]; then
+            echo "TRANSFERT DE RESTAURATION INTERROMPU (code $CODE)."
+            python3 "$SCRIPTS/record.py" restore failed \
+              --page RESTAURATION --type ftp --categorie technique \
+              --message "Le transfert de restauration a echoue en cours de route. Le site en ligne peut etre incomplet." \
+              --action "Un retour a l etat precedent est tente automatiquement."
+            echo "MW_REVERT=true" >> $GITHUB_ENV
+          else
+            echo "Transfert de restauration termine."
+            python3 "$SCRIPTS/record.py" restore ok
+            echo "MW_REVERT=false" >> $GITHUB_ENV
+          fi
+
+      - name: Controle de production
+        id: prod
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' && env.MW_REVERT != 'true' }}
+        continue-on-error: true
+        run: python3 "$SCRIPTS/production_check.py" "${{ steps.config.outputs.domain }}" false
+
+      - name: Retour a l etat precedent
+        if: ${{ inputs.backup != '' && env.MW_BLOCKED != 'true' && (env.MW_REVERT == 'true' || steps.prod.outcome == 'failure') }}
+        shell: bash {0}
+        env:
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          echouer_retour() {
+            echo "RETOUR ARRIERE EN ECHEC : $1"
+            python3 "$SCRIPTS/record.py" revert failed \
+              --page RETOUR --type production --categorie technique \
+              --message "La restauration et le retour arriere ont echoue : $1" \
+              --action "Intervention technique necessaire : le site en ligne peut etre incomplet."
+            exit 0
+          }
+
+          # Cas particulier : avant la restauration, le dossier etait vide.
+          # Revenir en arriere signifie alors le revider, pas restaurer un filet.
+          if [ "${ETAT_PRECEDENT:-}" = "vide" ]; then
+            if [ -z "$MIRROR_DELETE" ]; then
+              echouer_retour "le dossier ne peut pas etre revide : la suppression est desactivee sur ce chemin"
+            fi
+            echo "Etat precedent : dossier vide. Remise a vide du dossier cible."
+            VIDE="$RUNNER_TEMP/vide"
+            rm -rf "$VIDE" && mkdir -p "$VIDE"
+
+            { cat "$CONNECT_FILE"
+              echo "mirror -R $MIRROR_DELETE \"$VIDE/\" \"$SFTP_REMOTE_PATH\""
+              echo "quit"; } > "$RUNNER_TEMP/rv0.txt"
+            lftp -f "$RUNNER_TEMP/rv0.txt"
+            [ $? -ne 0 ] && echouer_retour "la remise a vide du dossier a echoue"
+
+            # Verification : le dossier doit reellement etre vide.
+            { cat "$CONNECT_FILE"; echo "cls -1 -a \"$SFTP_REMOTE_PATH/\""; echo "quit"; } > "$RUNNER_TEMP/rv0b.txt"
+            if ! lftp -f "$RUNNER_TEMP/rv0b.txt" > "$RUNNER_TEMP/apres.txt" 2>&1; then
+              echouer_retour "impossible de verifier le dossier apres la remise a vide"
+            fi
+            RESTE=$(grep -v -E '^\.\.?/?$' "$RUNNER_TEMP/apres.txt" | grep -v '^[[:space:]]*$' | grep -c . || true)
+            if [ "$RESTE" -ne 0 ]; then
+              echouer_retour "le dossier contient encore $RESTE entree(s) apres la remise a vide"
+            fi
+
+            python3 "$SCRIPTS/record.py" revert done
+            python3 -c "import mw_common as mw; r=mw.charger(); r['revertCheck']='ok'; mw.sauver(r)"
+            echo "Dossier remis dans son etat vide initial."
+            exit 0
+          fi
+
+          if [ -z "${FILET:-}" ]; then
+            echouer_retour "aucun filet de securite n avait pu etre cree"
+          fi
+
+          echo "Remise en ligne de l etat precedent : $FILET"
+          L="$RUNNER_TEMP/retour"
+          rm -rf "$L" && mkdir -p "$L"
+
+          { cat "$CONNECT_FILE"; echo "mirror \"$FILET\" \"$L\""; echo "quit"; } > "$RUNNER_TEMP/rv1.txt"
+          lftp -f "$RUNNER_TEMP/rv1.txt"
+          [ $? -ne 0 ] && echouer_retour "le telechargement du filet a echoue"
+          [ ! -f "$L/index.html" ] && echouer_retour "le filet ne contient pas de page d accueil"
+
+          { cat "$CONNECT_FILE"
+            echo "mirror -R $MIRROR_DELETE \"$L/\" \"$SFTP_REMOTE_PATH\""
+            echo "quit"; } > "$RUNNER_TEMP/rv2.txt"
+          lftp -f "$RUNNER_TEMP/rv2.txt"
+          [ $? -ne 0 ] && echouer_retour "le reenvoi du filet a echoue"
+
+          python3 "$SCRIPTS/record.py" revert done
+          echo "Etat precedent remis en ligne."
+
+          if python3 "$SCRIPTS/production_check.py" "${{ steps.config.outputs.domain }}" false; then
+            python3 -c "import mw_common as mw; r=mw.charger(); r['revertCheck']='ok'; mw.sauver(r)"
+          else
+            python3 -c "import mw_common as mw; r=mw.charger(); r['revertCheck']='failed'; mw.sauver(r)"
+          fi
+
+      - name: Nettoyage des identifiants
+        if: always()
+        run: rm -f "$RUNNER_TEMP"/lftp-connect.txt "$RUNNER_TEMP"/*.txt || true
+
+      - name: Rapport
+        if: ${{ always() && inputs.backup != '' }}
+        run: python3 "$SCRIPTS/deployment_report.py" "$RUNNER_TEMP"
+
+      - name: Notification email
+        if: ${{ always() && inputs.backup != '' && steps.config.outputs.notify == 'true' }}
+        env:
+          MW_NOTIFY_HOST: ${{ secrets.MW_NOTIFY_HOST }}
+          MW_NOTIFY_PORT: ${{ secrets.MW_NOTIFY_PORT }}
+          MW_NOTIFY_USER: ${{ secrets.MW_NOTIFY_USER }}
+          MW_NOTIFY_PASSWORD: ${{ secrets.MW_NOTIFY_PASSWORD }}
+          MW_NOTIFY_FROM: ${{ secrets.MW_NOTIFY_FROM }}
+          MW_NOTIFY_TO: ${{ secrets.MW_NOTIFY_TO }}
+        run: python3 "$SCRIPTS/send_notification.py" "$RUNNER_TEMP"
+
+      - name: Verdict
+        if: always()
+        run: python3 "$SCRIPTS/verdict.py"
