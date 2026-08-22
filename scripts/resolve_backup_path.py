@@ -153,5 +153,38 @@ elif etat is False:
     print("Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
     mw.info(r, "Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
 
+# --- DIAGNOSTIC TEMPORAIRE --------------------------------------------
+def _diag(racine):
+    import tempfile
+    connect = os.environ.get('CONNECT_FILE', '')
+    if not connect or not os.path.isfile(connect):
+        return
+    base = os.environ.get('RUNNER_TEMP') or tempfile.gettempdir()
+    src = os.path.join(base, 'diag-src')
+    os.makedirs(os.path.join(src, 'sous'), exist_ok=True)
+    open(os.path.join(src, 'index.html'), 'w').write('<html>diag</html>')
+    open(os.path.join(src, '.mw-site.json'), 'w').write('{}')
+    open(os.path.join(src, 'sous', 'a.css'), 'w').write('body{}')
+    cible = racine + '/_diag'
+    f = os.path.join(base, 'diag.txt')
+    with open(f, 'w', encoding='utf-8') as g:
+        g.write(open(connect, encoding='utf-8').read())
+        g.write('mirror -R "%s" "%s"\n' % (src, cible))
+        g.write('quit\n')
+    c = subprocess.run(['lftp', '-f', f], capture_output=True, text=True)
+    msg = ('code=%s | out=%s | err=%s' % (c.returncode, c.stdout.strip(), c.stderr.strip()))
+    print('::warning title=MW diag mirror::' + msg.replace('\n', ' / ')[:600])
+    f2 = os.path.join(base, 'diag-rm.txt')
+    with open(f2, 'w', encoding='utf-8') as g:
+        g.write(open(connect, encoding='utf-8').read())
+        g.write('set cmd:fail-exit no\nrm -r "%s"\nquit\n' % cible)
+    subprocess.run(['lftp', '-f', f2], capture_output=True, text=True)
+
+
+try:
+    _diag(candidat)
+except Exception as exc:
+    print('::warning title=MW diag mirror::erreur %s' % exc)
+
 mw.sauver(r)
 publier(candidat, True, suppression)
