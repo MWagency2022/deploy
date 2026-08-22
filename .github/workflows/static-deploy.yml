@@ -421,7 +421,14 @@ jobs:
             { cat "$CONNECT_FILE"; echo "cls -1 -a \"${PARENT:-.}/\""; echo "quit"; } > "$RUNNER_TEMP/s2.txt"
             if lftp -f "$RUNNER_TEMP/s2.txt" > "$RUNNER_TEMP/parent.txt" 2>&1; then
               PARENT_ETAT=ok
-              if grep -Fxq -e "$NOM" -e "$NOM/" "$RUNNER_TEMP/parent.txt"; then
+              # lftp prefixe souvent les entrees du chemin demande
+              # (sites/domaine.ch/ et non domaine.ch/) : on compare les
+              # noms de base, jamais les lignes brutes.
+              sed -e 's:/*$::' -e 's:.*/::' "$RUNNER_TEMP/parent.txt" \
+                | grep -v '^[[:space:]]*$' > "$RUNNER_TEMP/parent-noms.txt"
+              echo "Entrees du parent :"
+              sed 's/^/    /' "$RUNNER_TEMP/parent-noms.txt" | head -20
+              if grep -Fxq "$NOM" "$RUNNER_TEMP/parent-noms.txt"; then
                 DOSSIER=existe
               else
                 DOSSIER=absent
@@ -438,14 +445,15 @@ jobs:
           if [ "$PARENT_ETAT" = "ok" ] && [ "$DOSSIER" = "existe" ]; then
             { cat "$CONNECT_FILE"; echo "cls -1 -a \"$SFTP_REMOTE_PATH/\""; echo "quit"; } > "$RUNNER_TEMP/s3.txt"
             if lftp -f "$RUNNER_TEMP/s3.txt" > "$RUNNER_TEMP/contenu.txt" 2>&1; then
-              ENTREES=$(grep -v -E '^\.\.?/?$' "$RUNNER_TEMP/contenu.txt" | grep -v '^[[:space:]]*$' || true)
+              ENTREES=$(sed -e 's:/*$::' -e 's:.*/::' "$RUNNER_TEMP/contenu.txt" \
+                        | grep -v -E '^\.\.?$' | grep -v '^[[:space:]]*$' || true)
               NB=$(echo "$ENTREES" | grep -c . || true)
               [ "$NB" -gt 0 ] && VIDE=non
               echo "Contenu         : $NB entree(s)"
               echo "$ENTREES" | head -20 | sed 's/^/    /'
 
               # Sonde 4 : le marqueur, uniquement s il figure dans le listing.
-              if echo "$ENTREES" | grep -qE '(^|/)\.mw-site\.json/?$'; then
+              if echo "$ENTREES" | grep -Fxq '.mw-site.json'; then
                 { cat "$CONNECT_FILE"
                   echo "get \"$SFTP_REMOTE_PATH/.mw-site.json\" -o \"$M\""
                   echo "quit"; } > "$RUNNER_TEMP/s4.txt"
@@ -717,7 +725,9 @@ jobs:
               if ! lftp -f "$RUNNER_TEMP/rba2.txt" > "$RUNNER_TEMP/parent-apres.txt" 2>&1; then
                 echouer_rollback "impossible de verifier le dossier parent apres la suppression"
               fi
-              if grep -Fxq -e "$CIBLE_NOM" -e "$CIBLE_NOM/" "$RUNNER_TEMP/parent-apres.txt"; then
+              sed -e 's:/*$::' -e 's:.*/::' "$RUNNER_TEMP/parent-apres.txt" \
+                | grep -v '^[[:space:]]*$' > "$RUNNER_TEMP/parent-apres-noms.txt"
+              if grep -Fxq "$CIBLE_NOM" "$RUNNER_TEMP/parent-apres-noms.txt"; then
                 echouer_rollback "le dossier existe encore dans son parent apres la suppression"
               fi
 
