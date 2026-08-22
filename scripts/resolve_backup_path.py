@@ -103,6 +103,49 @@ if est_dans(candidat, remote):
             "situe hors du site publie.",
             trouve=candidat, attendu=f"un dossier hors de {remote or 'la racine'}")
 
+# ---------------------------------------------------------------------
+# SONDE TEMPORAIRE : ou le compte FTP autorise-t-il l ecriture ?
+# (retiree des que le bon emplacement par defaut est etabli)
+# ---------------------------------------------------------------------
+def _sonde():
+    import subprocess, tempfile
+    connect = os.environ.get('CONNECT_FILE', '')
+    if not connect or not os.path.isfile(connect):
+        print("::warning title=MW sonde::CONNECT_FILE absent")
+        return
+    base = os.environ.get('RUNNER_TEMP', tempfile.gettempdir())
+    parent = posixpath.dirname(remote)
+    essais = [
+        ('A_frere_du_site', posixpath.join(parent, '.mw-probe') if parent else '.mw-probe'),
+        ('B_racine_compte', '.mw-probe'),
+        ('C_backups_racine', 'backups/.mw-probe'),
+        ('D_dans_le_site', posixpath.join(remote, '.mw-probe') if remote else '.mw-probe'),
+    ]
+    resultats = []
+    for nom, chemin in essais:
+        f = os.path.join(base, 'probe-%s.txt' % nom)
+        with open(f, 'w', encoding='utf-8') as g:
+            g.write(open(connect, encoding='utf-8').read())
+            g.write('mkdir -p "%s"\n' % chemin)
+            g.write('quit\n')
+        c = subprocess.run(['lftp', '-f', f], capture_output=True, text=True)
+        ok = (c.returncode == 0)
+        resultats.append('%s=%s' % (nom, 'ok' if ok else 'echec'))
+        if ok:
+            f2 = os.path.join(base, 'probe-rm-%s.txt' % nom)
+            with open(f2, 'w', encoding='utf-8') as g:
+                g.write(open(connect, encoding='utf-8').read())
+                g.write('rmdir "%s"\n' % chemin)
+                g.write('quit\n')
+            subprocess.run(['lftp', '-f', f2], capture_output=True, text=True)
+    print("::warning title=MW sonde::" + " | ".join(resultats))
+
+
+try:
+    _sonde()
+except Exception as exc:
+    print("::warning title=MW sonde::erreur de sonde: %s" % exc)
+
 print(f"\nSauvegardes ({origine}) : {candidat}")
 r['backupPath'] = candidat
 mw.sauver(r)
