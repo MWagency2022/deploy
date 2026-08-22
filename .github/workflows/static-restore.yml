@@ -60,6 +60,13 @@ on:
       MW_NOTIFY_TO:
         required: false
 
+# Identite de ce moteur. Ces deux valeurs sont volontairement en dur :
+# un workflow appele ne peut pas determiner de facon fiable d ou il vient.
+# MOTEUR_REF doit correspondre au tag qui sert ce fichier.
+env:
+  MOTEUR_REPO: MWagency2022/deploy
+  MOTEUR_REF: v2-rc
+
 jobs:
   restauration:
     runs-on: ubuntu-latest
@@ -75,21 +82,14 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}/.mw-engine/scripts
 
     steps:
-      - name: Identification du moteur
-        id: moteur
-        run: |
-          REF="${{ github.workflow_ref }}"
-          echo "repo=$(echo "$REF" | cut -d/ -f1,2)" >> $GITHUB_OUTPUT
-          echo "ref=${REF##*@}" >> $GITHUB_OUTPUT
-
       - name: Recuperation du site
         uses: actions/checkout@v4
 
       - name: Recuperation du moteur
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.moteur.outputs.repo }}
-          ref: ${{ steps.moteur.outputs.ref }}
+          repository: ${{ env.MOTEUR_REPO }}
+          ref: ${{ env.MOTEUR_REF }}
           path: .mw-engine
 
       - name: Configuration effective

@@ -95,6 +95,13 @@ on:
       MW_NOTIFY_TO:
         required: false
 
+# Identite de ce moteur. Ces deux valeurs sont volontairement en dur :
+# un workflow appele ne peut pas determiner de facon fiable d ou il vient.
+# MOTEUR_REF doit correspondre au tag qui sert ce fichier.
+env:
+  MOTEUR_REPO: MWagency2022/deploy
+  MOTEUR_REF: v2-rc
+
 jobs:
 
   # =================================================================
@@ -104,19 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publier: ${{ steps.decision.outputs.publier }}
-      moteur_repo: ${{ steps.moteur.outputs.repo }}
-      moteur_ref: ${{ steps.moteur.outputs.ref }}
     steps:
-      - name: Identification du moteur
-        id: moteur
-        run: |
-          # github.workflow_ref vaut par exemple :
-          #   MWagency2022/deploy/.github/workflows/static-deploy.yml@refs/tags/v2
-          REF="${{ github.workflow_ref }}"
-          echo "repo=$(echo "$REF" | cut -d/ -f1,2)" >> $GITHUB_OUTPUT
-          echo "ref=${REF##*@}" >> $GITHUB_OUTPUT
-          echo "Moteur : $REF"
-
       - name: Recuperation du site
         uses: actions/checkout@v4
         with:
@@ -125,8 +120,8 @@ jobs:
       - name: Recuperation du moteur
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.moteur.outputs.repo }}
-          ref: ${{ steps.moteur.outputs.ref }}
+          repository: ${{ env.MOTEUR_REPO }}
+          ref: ${{ env.MOTEUR_REF }}
           path: .mw-engine
 
       - name: Configuration effective
@@ -233,8 +228,8 @@ jobs:
       - name: Recuperation du moteur
         uses: actions/checkout@v4
         with:
-          repository: ${{ needs.controle.outputs.moteur_repo }}
-          ref: ${{ needs.controle.outputs.moteur_ref }}
+          repository: ${{ env.MOTEUR_REPO }}
+          ref: ${{ env.MOTEUR_REF }}
           path: .mw-engine
 
       - name: Configuration effective
