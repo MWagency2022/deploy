@@ -163,5 +163,21 @@ elif etat is False:
     print("Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
     mw.info(r, "Le dossier des sauvegardes n'a pas pu etre cree sur le serveur.")
 
+# --- LISTE TEMPORAIRE -------------------------------------------------
+try:
+    _c = os.environ.get('CONNECT_FILE', '')
+    if _c and os.path.isfile(_c):
+        import tempfile as _t
+        _b = os.environ.get('RUNNER_TEMP') or _t.gettempdir()
+        _f = os.path.join(_b, 'liste.txt')
+        with open(_f, 'w', encoding='utf-8') as _g:
+            _g.write(open(_c, encoding='utf-8').read())
+            _g.write('set cmd:fail-exit no\ncls -1 -F "%s/"\nquit\n' % candidat)
+        _r = subprocess.run(['lftp', '-f', _f], capture_output=True, text=True)
+        _noms = [x.rstrip('/').split('/')[-1] for x in _r.stdout.split() if x.strip()]
+        print('::warning title=MW liste::' + ' | '.join(_noms)[:800])
+except Exception as _e:
+    print('::warning title=MW liste::%s' % _e)
+
 mw.sauver(r)
 publier(candidat, True, suppression)
