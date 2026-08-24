@@ -7,6 +7,7 @@ uniquement dans les secrets GitHub de chaque dépôt.
 
 | Domaine | Dépôt | Hébergeur | Protocole | Chemin distant | Statut | Version | Livré le |
 |---|---|---|---|---|---|---|---|
+| mwagency.ch | refonte-mw-agency | Infomaniak | sftp | `sites/mwagency.ch/` | livre | `v2` | 2026-08-24 |
 | testmwagency.ch | test-auto-dist | Infomaniak | sftp | `sites/testmwagency.ch/` | livre | `v2` | — (site de test) |
 
 ## Colonnes
