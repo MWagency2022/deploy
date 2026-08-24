@@ -14,15 +14,19 @@ if env:
     open(env, 'a', encoding='utf-8').write(f"MW_BLOCKED={'true' if bloque else 'false'}\n")
 
 if bloque:
+    # GitHub n'affiche que dix annotations par etape : tous les problemes sont
+    # donc rassembles dans une seule annotation, une ligne par probleme.
+    lignes = []
     for e in r.get('errors', []):
-        texte = f"{e.get('page', '')} / {e.get('type', '')} : {e.get('message', '')}"
-        trouve = e.get('found')
-        attendu = e.get('expected')
-        if trouve:
-            texte += f" [trouve: {trouve}]"
-        if attendu:
-            texte += f" [attendu: {attendu}]"
-        print("::error title=MW Agency::" + texte.replace('\n', ' '))
+        t = f"{e.get('page', '')} / {e.get('type', '')} : {e.get('message', '')}"
+        if e.get('found'):
+            t += f" [trouve: {e['found']}]"
+        if e.get('expected'):
+            t += f" [attendu: {e['expected']}]"
+        lignes.append(t.replace('\n', ' '))
+    if lignes:
+        corps = '%0A'.join(f"- {l}" for l in lignes)
+        print(f"::error title=MW Agency - {len(lignes)} probleme(s)::{corps}")
 
 print("PUBLICATION BLOQUEE - les etapes suivantes sont ignorees" if bloque
       else "Poursuite du deploiement")
