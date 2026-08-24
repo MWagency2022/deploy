@@ -7,7 +7,7 @@ uniquement dans les secrets GitHub de chaque dépôt.
 
 | Domaine | Dépôt | Hébergeur | Protocole | Chemin distant | Statut | Version | Livré le |
 |---|---|---|---|---|---|---|---|
-| testmwagency.ch | test-auto-dist | Infomaniak | sftp | `sites/testmwagency.ch/` | chantier | `v2` | — (site de test) |
+| testmwagency.ch | test-auto-dist | Infomaniak | sftp | `sites/testmwagency.ch/` | livre | `v2` | — (site de test) |
 
 ## Colonnes
 
