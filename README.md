@@ -25,7 +25,7 @@ scripts/
     record.py gate.py verdict.py   petites briques d'orchestration
     htaccess.conf          .htaccess livré par défaut
 tests/
-    run_tests.py           19 scénarios exécutés contre les vrais scripts
+    run_tests.py           scénarios exécutés contre les vrais scripts
 nouveau-client.sh          branchement guidé d'un nouveau site
 clients.md                 inventaire des sites
 LOVABLE_WORKSPACE_RULES.md règles à coller une fois dans Lovable
@@ -43,7 +43,9 @@ Placé à la racine du dépôt de chaque site :
   "domain": "https://client.ch",
   "language": "fr",
   "status": "chantier",
-  "localBusiness": true
+  "localBusiness": true,
+  "backup_path": "",
+  "pages": ["/"]
 }
 ```
 
@@ -55,6 +57,8 @@ Rien de sensible ici : ni mot de passe, ni identifiant.
 | `language` | Langue attendue dans `<html lang>` |
 | `localBusiness` | Exige un JSON-LD entreprise sur l'accueil |
 | `status` | `chantier` ou `livre` — pilote tout le reste |
+| `backup_path` | Dossier des sauvegardes. Vide = choisi automatiquement à côté du site |
+| `pages` | Pages qui doivent exister après le build. Vide = aucune exigence |
 
 ### Le statut pilote tout
 
@@ -88,6 +92,9 @@ la migration peut se faire site par site.
 
 Un échec bloquant n'interrompt jamais la production du rapport ni l'envoi de
 l'email : le workflow n'est marqué en échec qu'à la toute dernière étape.
+
+La raison d'un blocage s'affiche directement sur la page du run, en haut, sans
+avoir à ouvrir les journaux ni le rapport détaillé.
 
 ## Publier
 
@@ -138,9 +145,18 @@ que pas de donnée.
 
 ## Sauvegardes
 
-Placées à côté du site, jamais dedans. Conservation en jours, pas en nombre :
-tout sur 7 jours, puis une par jour jusqu'à 60 jours, plus la toute première
-gardée indéfiniment.
+Placées à côté du site, jamais dedans : par défaut dans un dossier
+`.mw-backups` frère du dossier publié — `sites/.mw-backups/client.ch/` pour un
+site déployé dans `sites/client.ch/`. `backup_path` permet d'imposer un autre
+emplacement, à condition qu'il soit hors du dossier publié.
+
+Le dossier est créé niveau par niveau : certains serveurs SFTP, dont ceux
+d'Infomaniak, refusent de créer plusieurs niveaux d'un seul coup. Un dossier
+`backups` à la racine du compte est volontairement évité : chez Infomaniak il
+existe déjà et n'est pas accessible en écriture.
+
+Conservation en jours, pas en nombre : tout sur 7 jours, puis une par jour
+jusqu'à 60 jours, plus la toute première gardée indéfiniment.
 
 Sur un site **livré** dont la production contient déjà des fichiers, une
 sauvegarde impossible bloque la publication : on ne remplace pas le site d'un
@@ -216,4 +232,4 @@ mieux vaut ne pas s'y trouver.
 python3 tests/run_tests.py
 ```
 
-19 scénarios exécutés contre les vrais scripts, sans mock.
+114 scénarios exécutés contre les vrais scripts, sans mock.
