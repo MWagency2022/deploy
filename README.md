@@ -189,7 +189,7 @@ Run workflow* en cochant *adopter_dossier_distant*.
 | `SFTP_PORT` | non |
 | `SITE_URL` | non — uniquement pour les dépôts sans `mw-config.json` |
 
-### Une seule fois, au niveau de l'organisation
+### Les six secrets d'envoi d'email, dans chaque depot client
 
 | Secret | Rôle |
 |---|---|

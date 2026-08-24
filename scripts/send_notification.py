@@ -1,4 +1,4 @@
-"""Envoi du rapport par email via les secrets d'organisation MW Agency."""
+"""Envoi du rapport par email via les secrets MW_NOTIFY_* du depot."""
 import os, smtplib, ssl, sys
 from email.message import EmailMessage
 
@@ -10,10 +10,14 @@ exp  = os.environ.get('MW_NOTIFY_FROM', '').strip() or user
 dest = os.environ.get('MW_NOTIFY_TO', '').strip()
 
 if not (hote and user and mdp and dest):
-    print("Notification email non configuree au niveau de l'organisation.")
-    print("Secrets attendus : MW_NOTIFY_HOST, MW_NOTIFY_USER, "
-          "MW_NOTIFY_PASSWORD, MW_NOTIFY_TO (MW_NOTIFY_FROM et "
-          "MW_NOTIFY_PORT facultatifs).")
+    manquants = [n for n, v in (('MW_NOTIFY_HOST', hote), ('MW_NOTIFY_USER', user),
+                                ('MW_NOTIFY_PASSWORD', mdp), ('MW_NOTIFY_TO', dest)) if not v]
+    print("Notification email non configuree : " + ", ".join(manquants))
+    # Un email silencieusement absent est un piege : il est signale sur la page
+    # du run, sans pour autant faire echouer le deploiement.
+    print("::warning title=MW Agency - email non envoye::Secret(s) manquant(s) : "
+          + ", ".join(manquants)
+          + ". Aucun rapport de deploiement n'a ete envoye par email.")
     sys.exit(0)
 
 dossier = sys.argv[1] if len(sys.argv) > 1 else '.'
@@ -41,4 +45,6 @@ except Exception as e:
     # Un email qui ne part pas ne doit pas masquer le resultat du deploiement.
     print(f"ECHEC de l'envoi de l'email : {type(e).__name__} {e}")
     print("Le resultat du deploiement reste visible dans le resume GitHub.")
+    print(f"::warning title=MW Agency - email non envoye::L'envoi du rapport a "
+          f"echoue ({type(e).__name__}). Verifier les secrets MW_NOTIFY_*.")
 sys.exit(0)
