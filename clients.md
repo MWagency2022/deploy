@@ -10,7 +10,7 @@ uniquement dans les secrets GitHub de chaque dépôt.
 | mwagency.ch | refonte-mw-agency | Infomaniak | sftp | `sites/mwagency.ch/` | livre | `v2` | 2026-08-24 |
 | testmwagency.ch | test-auto-dist | Infomaniak | sftp | `sites/testmwagency.ch/` | livre | `v2` | — (site de test) |
 | conceptcarrelage-sarl.ch | maquette-concept-carrelage | Hostpoint | sftp | `www/conceptcarrelage-sarl.ch/` | livre | `v2` | 2026-10-09 |
-| nbr-architectes.ch | maquette-nbr | Infomaniak | sftp | `sites/nbr-architectes.ch/` | chantier | `v2.1.0` (pilote) | — |
+| nbr-architectes.ch | maquette-nbr | Infomaniak | sftp | `sites/nbr-architectes.ch/` | chantier | `v2` | — |
 
 ## Colonnes
 

@@ -231,8 +231,8 @@ et échoue si `MOTEUR_REF` ne correspond pas au tag.
 | Changement de comportement | publier `v3.0.0` (+ alias `v3`) | aucun, jusqu'à migration site par site |
 | Site à figer | `uses: ...@vX.Y.Z` | aucune mise à jour automatique |
 
-`v2-rc` est l'ancienne référence des scripts de `v2` (jusqu'à `v2.0`) : à
-conserver tant qu'un site utilise l'ancien commit de `v2`.
+Depuis le 2026-10-27, `v2` = `v2.1.0`. `v2-rc` (= ancien `v2`, commit `252fa06`)
+est conservé comme point de retour : `git tag -fa v2 v2-rc^{}`.
 
 ## Hébergeurs
 
