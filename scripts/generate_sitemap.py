@@ -18,7 +18,9 @@ if not domaine:
                "Renseigner \"domain\" dans mw-config.json.")
     mw.sauver(r); sys.exit(0)
 
-pages = sorted(glob.glob(os.path.join(dossier, '**', '*.html'), recursive=True))
+pages = mw.pages_html(dossier)
+for v in mw.fichiers_verification(dossier):
+    print(f"Fichier de verification Search Console ignore (deploye tel quel) : {v}")
 retenues, ecartees = [], []
 vues = set()
 

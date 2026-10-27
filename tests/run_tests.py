@@ -1384,6 +1384,18 @@ with tempfile.TemporaryDirectory() as d:
     verifier('58b', "Deploiement et restauration visent la meme version du moteur",
              len(refs) == 1, f"versions trouvees : {refs}")
 
+    # Une version stable ne doit jamais charger ses scripts depuis un tag
+    # mobile (incident v2 -> v2-rc) : MOTEUR_REF est une version exacte, et
+    # a la publication elle doit etre egale au tag pousse.
+    import re as _re
+    ref = next(iter(refs)) if len(refs) == 1 else ''
+    tag = os.environ.get('MW_RELEASE_TAG', '')
+    verifier('58c', "MOTEUR_REF est une version exacte vX.Y.Z",
+             bool(_re.fullmatch(r'v\d+\.\d+\.\d+', ref or '')), f"MOTEUR_REF = {ref}")
+    if tag:
+        verifier('58d', "MOTEUR_REF correspond au tag publie",
+                 ref == tag, f"MOTEUR_REF = {ref}, tag = {tag}")
+
 
 # ============================================================ 59 — listings lftp prefixes
 #  Bug reel du premier run : lftp renvoie "sites/domaine.ch/" et non
@@ -1504,6 +1516,36 @@ verifier('61d', "Un dossier de sauvegarde impossible a creer ne bloque pas ici",
          rep.get('status_global') != 'blocked' and 'BACKUP_SAFE=1' in envtxt
          and "n'a pas pu etre cree" in " ".join(rep.get('infos', [])),
          "la preparation rend un verdict alors que ce n est pas son role")
+
+# ============================================================ 62 — verification Search Console
+#  Cas reel NBR : googled289889019fa83b6.html etait audite comme une page
+#  (9 erreurs) et bloquait le statut livre. Le fichier doit rester dans le
+#  build, mais sortir de l audit et du sitemap.
+with tempfile.TemporaryDirectory() as d:
+    b = os.path.join(d, 'dist')
+    verif = 'googled289889019fa83b6.html'
+    site(b, {
+        'index.html': page(canonical=DOMAINE + '/', schema=SCHEMA),
+        verif: 'google-site-verification: ' + verif,
+        # une vraie page dont le nom commence par google reste auditee
+        'google-avis.html': page(titre="Avis", canonical=DOMAINE + '/google-avis/', texte=50),
+    })
+    rp = rapport_neuf(d)
+    r = lancer('seo_audit.py', b, DOMAINE, 'fr', 'strict', 'true', rapport=rp)
+    rep = lire(rp)
+    pages_en_erreur = {e.get('page', '') for e in rep.get('errors', [])}
+    lancer('generate_sitemap.py', b, DOMAINE, rapport=rp)
+    xml = open(os.path.join(b, 'sitemap.xml'), encoding='utf-8').read()
+
+    verifier(62, "Le fichier de verification Google n est pas audite",
+             not any('GOOGLED2898' in p.upper() for p in pages_en_erreur)
+             and verif in r.stdout and 'ignore' in r.stdout,
+             f"pages en erreur : {pages_en_erreur}")
+    verifier('62b', "Le fichier de verification Google reste dans le build et hors sitemap",
+             os.path.exists(os.path.join(b, verif)) and 'googled2898' not in xml, xml)
+    verifier('62c', "Une page normale nommee google-* reste auditee",
+             any('GOOGLE-AVIS' in p.upper() for p in pages_en_erreur),
+             f"pages en erreur : {pages_en_erreur}")
 
 # ============================================================ bilan
 print("\n" + "=" * 68)

@@ -204,14 +204,35 @@ Aucun dépôt client ne contient de mot de passe email.
 
 ## Versions
 
-Les sites pointent sur un tag, jamais sur `main`. Les scripts sont récupérés
-au **même tag** que le workflow appelé : une version est donc cohérente de
-bout en bout.
+Chaque version est un tag **exact et immuable** `vX.Y.Z` (ex. `v2.1.0`).
+Dans ce commit, `MOTEUR_REF` des deux workflows vaut exactement ce tag : le
+workflow appelé et ses scripts viennent donc toujours du même commit. Un tag
+exact n'est jamais déplacé ni supprimé.
+
+Le tag de branche `v2` n'est qu'un alias qu'on fait pointer sur une version
+exacte validée ; comme celle-ci se référence elle-même, `@v2` reste cohérent.
+
+Publier une version :
+
+```bash
+# 1. MOTEUR_REF: vX.Y.Z dans static-deploy.yml et static-restore.yml
+MW_RELEASE_TAG=vX.Y.Z python3 tests/run_tests.py
+git commit -am "Moteur vX.Y.Z" && git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin main vX.Y.Z
+# 2. tester sur un site pilote avec uses: ...@vX.Y.Z
+# 3. seulement apres validation : git tag -fa v2 vX.Y.Z^{} && git push -f origin v2
+```
+
+Le workflow `verification-version.yml` rejoue les tests à chaque tag `v*.*.*`
+et échoue si `MOTEUR_REF` ne correspond pas au tag.
 
 | Situation | Action | Effet |
 |---|---|---|
-| Correction sans changement de comportement | déplacer le tag | tous les sites au déploiement suivant |
-| Changement de comportement | publier `v3` | aucun, jusqu'à migration site par site |
+| Nouvelle version compatible | publier `v2.Y.Z`, piloter, puis déplacer `v2` | tous les sites `@v2` au déploiement suivant |
+| Changement de comportement | publier `v3.0.0` (+ alias `v3`) | aucun, jusqu'à migration site par site |
+| Site à figer | `uses: ...@vX.Y.Z` | aucune mise à jour automatique |
+
+`v2-rc` est l'ancienne référence des scripts de `v2` (jusqu'à `v2.0`) : à
+conserver tant qu'un site utilise l'ancien commit de `v2`.
 
 ## Hébergeurs
 
@@ -232,4 +253,4 @@ mieux vaut ne pas s'y trouver.
 python3 tests/run_tests.py
 ```
 
-114 scénarios exécutés contre les vrais scripts, sans mock.
+118 scénarios exécutés contre les vrais scripts, sans mock.

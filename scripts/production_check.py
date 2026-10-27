@@ -79,6 +79,19 @@ if attend_sitemap:
         else:
             print(f"  sitemap conforme au domaine {hote} ({nb_urls} page(s))")
 
+# Fichiers de verification Search Console : leur disparition ferait perdre la
+# propriete du site dans Google. Signale, sans declencher de rollback.
+build = r.get('buildDir') or ''
+for v in (mw.fichiers_verification(build) if build and os.path.isdir(build) else []):
+    print(f"\nVerification Search Console : {domaine}/{v}")
+    code_v, corps_v = demander(f"{domaine}/{v}", tentatives=2, attente=5)
+    if code_v != 200 or 'google-site-verification' not in corps_v:
+        mw.avertir(r, 'PRODUCTION', 'search_console',
+                   f"Le fichier de verification {v} n'est pas servi correctement ({code_v}).",
+                   "Verifier que le fichier est bien dans public/ et que le .htaccess ne le redirige pas.")
+    else:
+        print("  servi correctement")
+
 if echecs:
     print("\nCONTROLE DE PRODUCTION EN ECHEC")
     for e in echecs:

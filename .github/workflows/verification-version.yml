@@ -1,0 +1,24 @@
+# Garde-fou de publication : un tag vX.Y.Z doit contenir MOTEUR_REF: vX.Y.Z
+# et passer le banc de test. Ne deploie rien.
+name: Verification de version
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml
+      - name: Banc de test et coherence MOTEUR_REF / tag
+        env:
+          MW_RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 tests/run_tests.py

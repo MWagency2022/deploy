@@ -97,10 +97,12 @@ on:
 
 # Identite de ce moteur. Ces deux valeurs sont volontairement en dur :
 # un workflow appele ne peut pas determiner de facon fiable d ou il vient.
-# MOTEUR_REF doit correspondre au tag qui sert ce fichier.
+# MOTEUR_REF est la version exacte (vX.Y.Z, tag immuable) qui contient ce
+# fichier. Les tags de branche (v2, ...) ne font que pointer sur une version
+# exacte : workflow et scripts viennent donc toujours du meme commit.
 env:
   MOTEUR_REPO: MWagency2022/deploy
-  MOTEUR_REF: v2-rc
+  MOTEUR_REF: v2.1.0
 
 jobs:
 

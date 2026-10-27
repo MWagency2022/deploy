@@ -1,5 +1,5 @@
 """Fonctions partagees par les scripts du moteur MW Agency."""
-import json, os, re, sys, html as _html
+import glob, json, os, re, sys, html as _html
 
 RAPPORT = os.environ.get('MW_REPORT', 'mw-report.json')
 
@@ -124,6 +124,28 @@ TECHNIQUES = ('404', 'thank-you', 'thankyou', 'merci', 'thanks', '500', 'offline
 SECONDAIRES = ('contact', 'mentions', 'mentions-legales', 'legal', 'privacy',
                'confidentialite', 'politique-de-confidentialite', 'cgv', 'cgu',
                'conditions', 'plan-du-site', 'sitemap')
+
+
+# Fichiers de verification Google Search Console (googleXXXX.html a la racine).
+# Ils sont deployes et servis tels quels, mais ce ne sont pas des pages du
+# site : ni audit SEO, ni sitemap, ni classement editorial.
+VERIFICATION = re.compile(r'(?i)^google[0-9a-f]{8,}\.html$')
+
+
+def est_verification(rel):
+    return bool(VERIFICATION.match(rel.replace(os.sep, '/')))
+
+
+def fichiers_verification(dossier):
+    return sorted(os.path.relpath(p, dossier).replace(os.sep, '/')
+                  for p in glob.glob(os.path.join(dossier, '*.html'))
+                  if est_verification(os.path.relpath(p, dossier)))
+
+
+def pages_html(dossier):
+    """Pages editoriales du build : tous les .html sauf les fichiers de verification."""
+    tous = sorted(glob.glob(os.path.join(dossier, '**', '*.html'), recursive=True))
+    return [p for p in tous if not est_verification(os.path.relpath(p, dossier))]
 
 
 def url_attendue(rel, domaine):
